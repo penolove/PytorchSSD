@@ -90,8 +90,11 @@ def py_cpu_nms(dets, thresh):
 
 
 class ObjectDetector:
-    def __init__(self, net, detection, transform, num_classes=21, cuda=False, max_per_image=300, thresh=0.5):
+    def __init__(
+            self, net, detection, transform, priors, num_classes=21,
+            cuda=False, max_per_image=300, thresh=0.5):
         self.net = net
+        self.priors = priors
         self.detection = detection
         self.transform = transform
         self.max_per_image = 300
@@ -105,12 +108,12 @@ class ObjectDetector:
                               img.shape[1], img.shape[0]]).cpu().numpy()
         _t = {'im_detect': Timer(), 'misc': Timer()}
         assert img.shape[2] == 3
-        x = Variable(self.transform(img).unsqueeze(0), volatile=True)
+        x = Variable(self.transform(img).unsqueeze(0), volatile=True).cpu()
         if self.cuda:
             x = x.cuda()
         _t['im_detect'].tic()
-        out = net(x, test=True)  # forward pass
-        boxes, scores = self.detection.forward(out, priors)
+        out = self.net(x, test=True)  # forward pass
+        boxes, scores = self.detection.forward(out, self.priors)
         detect_time = _t['im_detect'].toc()
         boxes = boxes[0]
         scores = scores[0]
@@ -120,9 +123,9 @@ class ObjectDetector:
         # scale each detection back up to the image
         boxes *= scale
         _t['misc'].tic()
-        all_boxes = [[] for _ in range(num_classes)]
+        all_boxes = [[] for _ in range(self.num_classes)]
 
-        for j in range(1, num_classes):
+        for j in range(1, self.num_classes):
             inds = np.where(scores[:, j] > self.thresh)[0]
             if len(inds) == 0:
                 all_boxes[j] = np.zeros([0, 5], dtype=np.float32)
@@ -139,10 +142,10 @@ class ObjectDetector:
             c_dets = c_dets[keep, :]
             all_boxes[j] = c_dets
         if self.max_per_image > 0:
-            image_scores = np.hstack([all_boxes[j][:, -1] for j in range(1, num_classes)])
+            image_scores = np.hstack([all_boxes[j][:, -1] for j in range(1, self.num_classes)])
             if len(image_scores) > self.max_per_image:
                 image_thresh = np.sort(image_scores)[-self.max_per_image]
-                for j in range(1, num_classes):
+                for j in range(1, self.num_classes):
                     keep = np.where(all_boxes[j][:, -1] >= image_thresh)[0]
                     all_boxes[j] = all_boxes[j][keep, :]
 
