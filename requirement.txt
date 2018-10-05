@@ -1,3 +1,3 @@
-eyewitness==0.24
+eyewitness==0.27
 matplotlib
 opencv-python
