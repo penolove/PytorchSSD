@@ -1,16 +1,26 @@
 import argparse
-
-import torch
 import cv2
+import torch
 import numpy as np
+from collections import OrderedDict
+from typing import Union
+
 import torch.backends.cudnn as cudnn
+from eyewitness.detection_utils import DetectionResult
+from eyewitness.image_id import ImageId
+from eyewitness.object_detector import ObjectDetector
+from eyewitness.image_utils import ImageHandler
 from torch.autograd import Variable
 from PIL import Image
 
-from demo.live import ObjectDetector
+import models
+from utils.timer import Timer
+from utils.nms.py_cpu_nms import py_cpu_nms
 from data import BaseTransform, VOC_300, VOC_512, COCO_300, COCO_512, COCO_mobile_300
 from data import VOC_CLASSES as labelmap
 from layers.functions import Detect, PriorBox
+
+
 
 parser = argparse.ArgumentParser(description='Receptive Field Block Net Training')
 parser.add_argument('-s', '--size', default='300', help='300 or 512 input size.')
@@ -24,90 +34,149 @@ parser.add_argument('--cuda', default=False, type=bool,
 args = parser.parse_args()
 
 
+BUILD_NET_METHOD = {
+    'RFB_vgg': models.RFB_Net_vgg.build_net,
+    'FSSD_vgg': models.FSSD_vgg.build_net,
+}
+
+class PytorchDetectorWrapper(ObjectDetector):
+    def __init__(
+            self, cfg, size, dataset, model_ver, weight_path,
+            cuda=False, max_per_image=300, thresh=0.5):
+
+        img_dim = (300, 512)[size == '512']
+        num_classes = (21, 81)[dataset == 'COCO']
+        self.net = self.create_net(img_dim, num_classes, model_ver, weight_path)
+
+        priorbox = PriorBox(cfg)
+        self.priors = Variable(priorbox.forward(), volatile=True)
+        self.detection = Detect(num_classes, 0, cfg)
+
+        rgb_means = ((104, 117, 123), (103.94, 116.78, 123.68))[model_ver == 'RFB_mobile']
+        rgb_std = (1, 1, 1)
+        transform = BaseTransform(self.net.size, rgb_means, rgb_std, (2, 0, 1))
+        self.transform = transform
+        self.num_classes = num_classes
+        self.max_per_image = max_per_image
+        self.cuda = cuda
+        self.thresh = thresh
+        if not self.cuda:
+            self.priors = self.priors.cpu()
+            self.net = self.net.cpu()
+
+    def load_weights(self, weight_path):
+        # load network
+        print('Loading network weihgt from: %s' % (weight_path))
+        state_dict = torch.load(weight_path)
+        # create new OrderedDict that does not contain `module.`
+
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            head = k[:7]
+            if head == 'module.':
+                name = k[7:]  # remove `module.`
+            else:
+                name = k
+            if k.startswith('base.'):
+                name = k.replace('base.', 'base.layers.')
+            new_state_dict[name] = v
+        return new_state_dict
+        
+    def create_net(self, img_dim, num_classes, model_ver, weight_path):
+        assert model_ver in BUILD_NET_METHOD
+        build_net = BUILD_NET_METHOD[model_ver]
+        net = build_net(img_dim, num_classes)
+        new_state_dict = self.load_weights(weight_path)
+        net.load_state_dict(new_state_dict)
+        net.eval()
+        print('Finished loading model!')
+        print(net)
+        return net
+
+    def predict(self, img):
+        scale = torch.Tensor([img.shape[1], img.shape[0],
+                              img.shape[1], img.shape[0]]).cpu().numpy()
+        _t = {'im_detect': Timer(), 'misc': Timer()}
+        assert img.shape[2] == 3
+        x = Variable(self.transform(img).unsqueeze(0), volatile=True).cpu()
+        if self.cuda:
+            x = x.cuda()
+        _t['im_detect'].tic()
+        out = self.net(x, test=True)  # forward pass
+        boxes, scores = self.detection.forward(out, self.priors)
+        detect_time = _t['im_detect'].toc()
+        boxes = boxes[0]
+        scores = scores[0]
+
+        boxes = boxes.cpu().numpy()
+        scores = scores.cpu().numpy()
+        # scale each detection back up to the image
+        boxes *= scale
+        _t['misc'].tic()
+        all_boxes = [[] for _ in range(self.num_classes)]
+
+        for j in range(1, self.num_classes):
+            inds = np.where(scores[:, j] > self.thresh)[0]
+            if len(inds) == 0:
+                all_boxes[j] = np.zeros([0, 5], dtype=np.float32)
+                continue
+            c_bboxes = boxes[inds]
+            c_scores = scores[inds, j]
+            print(scores[:, j])
+            c_dets = np.hstack((c_bboxes, c_scores[:, np.newaxis])).astype(
+                np.float32, copy=False)
+            # keep = nms(c_bboxes,c_scores)
+
+            keep = py_cpu_nms(c_dets, 0.45)
+            keep = keep[:50]
+            c_dets = c_dets[keep, :]
+            all_boxes[j] = c_dets
+        if self.max_per_image > 0:
+            image_scores = np.hstack([all_boxes[j][:, -1] for j in range(1, self.num_classes)])
+            if len(image_scores) > self.max_per_image:
+                image_thresh = np.sort(image_scores)[-self.max_per_image]
+                for j in range(1, self.num_classes):
+                    keep = np.where(all_boxes[j][:, -1] >= image_thresh)[0]
+                    all_boxes[j] = all_boxes[j][keep, :]
+
+        nms_time = _t['misc'].toc()
+        print('net time: ', detect_time)
+        print('post time: ', nms_time)
+        return all_boxes
+
+    def detect(self, image: Image, image_id: Union[str, ImageId]) -> DetectionResult:
+        image_array = np.array(image)
+        image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+        detect_bboxes = self.predict(image_array)
+
+        detected_objects = []
+        for class_id, class_collection in enumerate(detect_bboxes):
+            if len(class_collection) > 0:
+                for i in range(class_collection.shape[0]):
+                    label = labelmap[class_id]
+                    x1, y1, x2, y2, score = class_collection[i]
+                    if score > 0.6:
+                        detected_objects.append([x1, y1, x2, y2, label, score, ''])
+
+        image_dict = {
+            'image_id': image_id,
+            'detected_objects': detected_objects,
+        }
+        detection_result = DetectionResult(image_dict)
+        return detection_result
+        
 
 if __name__ == '__main__':
-
     # get cfg 
     if args.dataset == 'VOC':
         cfg = (VOC_300, VOC_512)[args.size == '512']
     else:
         cfg = (COCO_300, COCO_512)[args.size == '512']
 
-    # get model generator
-    if args.version == 'RFB_vgg':
-        from models.RFB_Net_vgg import build_net
-    elif args.version == 'RFB_mobile':
-        from models.RFB_Net_mobile import build_net
-        cfg = COCO_mobile_300
-    elif args.version == 'SSD_vgg':
-        from models.SSD_vgg import build_net
-    elif args.version == 'FSSD_vgg':
-        from models.FSSD_vgg import build_net
-    elif args.version == 'FRFBSSD_vgg':
-        from models.FRFBSSD_vgg import build_net
-    else:
-        print('Unkown version!')
+    object_detector = PytorchDetectorWrapper(
+        cfg, args.size, args.dataset, args.version, args.basenet, cuda=args.cuda)
 
-
-    priorbox = PriorBox(cfg)
-    priors = Variable(priorbox.forward(), volatile=True)
-
-    img_dim = (300, 512)[args.size == '512']
-    num_classes = (21, 81)[args.dataset == 'COCO']
-    net = build_net(img_dim, num_classes)
-
-    # load resume network
-    resume_net_path = args.basenet
-    print('Loading resume network: %s' % (resume_net_path))
-    state_dict = torch.load(resume_net_path)
-    # create new OrderedDict that does not contain `module.`
-    from collections import OrderedDict
-
-    new_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        head = k[:7]
-        if head == 'module.':
-            name = k[7:]  # remove `module.`
-        else:
-            name = k
-        if k.startswith('base.'):
-            name = k.replace('base.', 'base.layers.')
-        new_state_dict[name] = v
-    net.load_state_dict(new_state_dict)
-    net.eval()
-    print('Finished loading model!')
-    print(net)
-    # load data
-    if args.cuda:
-        print("use cuda")
-        net = net.cuda()
-        priors = priors.cuda()
-        cudnn.benchmark = True
-    else:
-        priors = priors.cpu()
-        net = net.cpu()
-
-    detector = Detect(num_classes, 0, cfg)
-    rgb_means = ((104, 117, 123), (103.94, 116.78, 123.68))[args.version == 'RFB_mobile']
-    rgb_std = (1, 1, 1)
-    transform = BaseTransform(net.size, rgb_means, rgb_std, (2, 0, 1))
-    object_detector = ObjectDetector(net, detector, transform, cuda=args.cuda, priors=priors)
-    image = np.array(Image.open('demo/test_image.jpg'))
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    
-    COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
-    FONT = cv2.FONT_HERSHEY_SIMPLEX
-    detect_bboxes = object_detector.predict(image)
-    for class_id, class_collection in enumerate(detect_bboxes):
-        if len(class_collection) > 0:
-            for i in range(class_collection.shape[0]):
-                if class_collection[i, -1] > 0.6:
-                    pt = class_collection[i]
-                    cv2.rectangle(image, (int(pt[0]), int(pt[1])), (int(pt[2]),
-                                                                    int(pt[3])), COLORS[i % 3], 2)
-                    cv2.putText(image, labelmap[class_id], (int(pt[0]), int(pt[1])), FONT,
-                                0.5, (255, 255, 255), 2)
-    cv2.imwrite('5566.jpg', image)
-
-
-
+    image = Image.open('demo/test_image.jpg')
+    detection_result = object_detector.detect(image, './5566.jpg')
+    ImageHandler.draw_bbox(image, detection_result.detected_objects)
+    ImageHandler.save(image, detection_result.image_id)
