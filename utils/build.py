@@ -115,12 +115,15 @@ ext_modules = [
     Extension(
         "nms.cpu_nms",
         ["nms/cpu_nms.pyx"],
+        extra_compile_args={'gcc': ["-Wno-cpp", "-Wno-unused-function"]},
         include_dirs=[numpy_include]
     ),
     Extension(
         'pycocotools._mask',
         sources=['pycocotools/maskApi.c', 'pycocotools/_mask.pyx'],
         include_dirs=[numpy_include, 'pycocotools'],
+        extra_compile_args={
+            'gcc': ['-Wno-cpp', '-Wno-unused-function', '-std=c99']},
     ),
 ]
 
