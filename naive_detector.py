@@ -61,8 +61,8 @@ class PytorchDetectorWrapper(ObjectDetector):
         self.cuda = cuda
         self.thresh = thresh
         if self.cuda:
-            self.priors = self.priors.gpu()
-            self.net = self.net.gpu()
+            self.priors = self.priors.cuda()
+            self.net = self.net.cuda()
         else:
             self.priors = self.priors.cpu()
             self.net = self.net.cpu()
