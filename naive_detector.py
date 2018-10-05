@@ -60,14 +60,17 @@ class PytorchDetectorWrapper(ObjectDetector):
         self.max_per_image = max_per_image
         self.cuda = cuda
         self.thresh = thresh
-        if not self.cuda:
+        if self.cuda:
+            self.priors = self.priors.gpu()
+            self.net = self.net.gpu()
+        else:
             self.priors = self.priors.cpu()
             self.net = self.net.cpu()
 
-    def load_weights(self, weight_path):
+    def load_weights(self, weight_path, location='cpu'):
         # load network
         print('Loading network weihgt from: %s' % (weight_path))
-        state_dict = torch.load(weight_path)
+        state_dict = torch.load(weight_path, map_location=location)
         # create new OrderedDict that does not contain `module.`
 
         new_state_dict = OrderedDict()
