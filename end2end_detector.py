@@ -4,7 +4,6 @@ import os
 import arrow
 import cv2
 import time
-import caffe
 from eyewitness.config import (IN_MEMORY, BBOX)
 from eyewitness.image_id import ImageId
 from eyewitness.image_utils import (ImageProducer, swap_channel_rgb_bgr, ImageHandler)
@@ -15,19 +14,21 @@ from peewee import SqliteDatabase
 from PIL import Image
 
 
-# class YOLO defines the default value, so suppress any default here
-parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+parser = argparse.ArgumentParser()
 '''
 Command line options
 '''
 parser.add_argument('-s', '--size', default='300', help='300 or 512 input size.')
 parser.add_argument('-d', '--dataset', default='VOC', help='VOC or COCO dataset')
 parser.add_argument(
-    '--version', default='RFB_vgg', help='RFB_vgg ,RFB_E_vgg RFB_mobile SSD_vgg version.')
+    '--version', default='RFB_vgg', help='RFB_vgg ,RFB_E_vgg RFB_mobile SSD_vgg version.'
+)
 parser.add_argument(
-    '--basenet', default='weights/RFB300_80_5.pth', help='pretrained base model')
-parser.add_argument('--cuda', default=False, type=bool,
-                    help='Use cuda to train model')
+    '--basenet', default='weights/RFB300_80_5.pth', help='pretrained base model'
+)
+parser.add_argument(
+    '--cuda', default=False, type=bool, help='Use cuda to train model'
+)
 parser.add_argument(
     '--db_path', type=str, default='::memory::',
     help='the path used to store detection result records'
