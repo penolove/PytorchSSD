@@ -180,6 +180,7 @@ if __name__ == '__main__':
         cfg, args.size, args.dataset, args.version, args.basenet, cuda=args.cuda)
 
     image = Image.open('demo/test_image.jpg')
-    detection_result = object_detector.detect(image, './5566.jpg')
+    image_id = ImageId(channel='demo', timestamp=arrow.now().timestamp, file_format='jpg')
+    detection_result = object_detector.detect(image, image_id)
     ImageHandler.draw_bbox(image, detection_result.detected_objects)
-    ImageHandler.save(image, detection_result.image_id)
+    ImageHandler.save(image, "detected_image/drawn_image.jpg")
