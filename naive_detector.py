@@ -31,8 +31,6 @@ parser.add_argument(
     '--basenet', default='weights/RFB300_80_5.pth', help='pretrained base model')
 parser.add_argument('--cuda', default=False, type=bool,
                     help='Use cuda to train model')
-args = parser.parse_args()
-
 
 BUILD_NET_METHOD = {
     'RFB_vgg': models.RFB_Net_vgg.build_net,
@@ -170,6 +168,7 @@ class PytorchDetectorWrapper(ObjectDetector):
         
 
 if __name__ == '__main__':
+    args = parser.parse_args()
     # get cfg 
     if args.dataset == 'VOC':
         cfg = (VOC_300, VOC_512)[args.size == '512']
