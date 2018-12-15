@@ -4,7 +4,6 @@ import os
 import arrow
 import cv2
 import time
-import caffe
 from eyewitness.config import (IN_MEMORY, BBOX)
 from eyewitness.image_id import ImageId
 from eyewitness.image_utils import (ImageProducer, swap_channel_rgb_bgr, ImageHandler)
