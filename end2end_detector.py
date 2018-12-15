@@ -9,9 +9,11 @@ from eyewitness.image_id import ImageId
 from eyewitness.image_utils import (ImageProducer, swap_channel_rgb_bgr, ImageHandler)
 from eyewitness.result_handler.db_writer import BboxPeeweeDbWriter
 from eyewitness.result_handler.line_detection_result_handler import LineAnnotationSender
-from naive_detector import PytorchDetectorWrapper
 from peewee import SqliteDatabase
 from PIL import Image
+
+from naive_detector import PytorchDetectorWrapper
+from data import BaseTransform, VOC_300, VOC_512, COCO_300, COCO_512, COCO_mobile_300
 
 
 parser = argparse.ArgumentParser()
