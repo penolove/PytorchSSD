@@ -115,11 +115,12 @@ if __name__ == '__main__':
         detection_result = object_detector.detect(image, image_id)
 
         # draw and save image, update detection result
-        drawn_image_path = "detected_image/%s_%s.%s" % (
-            image_id.channel, image_id.timestamp, image_id.file_format)
-        ImageHandler.draw_bbox(image, detection_result.detected_objects)
-        ImageHandler.save(image, drawn_image_path)
-        detection_result.image_dict['drawn_image_path'] = drawn_image_path
+        if len(detection_result.detected_objects) > 0:
+            drawn_image_path = "detected_image/%s_%s.%s" % (
+                image_id.channel, image_id.timestamp, image_id.file_format)
+            ImageHandler.draw_bbox(image, detection_result.detected_objects)
+            ImageHandler.save(image, drawn_image_path)
+            detection_result.image_dict['drawn_image_path'] = drawn_image_path
 
         for result_handler in result_handlers:
             result_handler.handle(detection_result)
